@@ -1,0 +1,140 @@
+
+name: ci-dev test for visualization
+on:
+  workflow_dispatch:  # Manual trigger
+    inputs:
+      test_firmware_ver:
+        description: |
+          firmware version/s
+        type: string
+        required: false
+        default: ''
+        
+      test_dirver_ver:
+        description: |
+          driver version/s
+        type: string
+        required: false
+        default: ''
+        
+      test_bsp_ver:
+        description: |
+          bsp version/s
+        type: string
+        required: false
+        default: ''
+        
+      test_level:
+        description: Test granularity
+        type: choice
+        required: true
+        default: basic
+        options:
+          - basic
+          - normal
+          
+      test_case:
+        description: |
+          Define custom target test case/s
+          (overrides basic test/s)
+        type: string
+        required: false
+        default: 'nfpflownic.unit_no_fw_ld.ping_1_fromA'
+      
+jobs:
+  running-job:
+    name: running concrete test
+    runs-on: akiva
+    timeout-minutes: 2000
+    steps:
+    #- name: Clean old artifacts
+    #  run: git clean -ffdx || rm -rf *
+    
+    #checkout test objects  
+    #3- name: Checkout ci-libs
+    #  uses: actions/checkout@v2
+    #  with:
+    #    repository: Corigine/ci-libs
+    #    ref: wip-visualization-test
+    #    path: ci-libs
+    #    token: ${{secrets.ACCESS_TOKEN}}
+        
+    #- name: Checkout nti-private
+    #  uses: actions/checkout@v2
+    #  with:
+    #    repository: Corigine/nti-private
+    #    ref: main
+    #    path: nti-private
+    #    token: ${{secrets.ACCESS_TOKEN}}
+        
+    #- name: Checkout ci-dev-nic-private
+    #  uses: actions/checkout@v2
+    #  with:
+    #    repository: Corigine/ci-dev-nic-private
+    #    ref: main
+    #    path: ci-dev-nic-private
+    #    token: ${{secrets.ACCESS_TOKEN}}
+    
+    - name: Get test metadata
+      id: build
+      run: |
+        echo "::set-output name=sha::${GITHUB_SHA:0:7}"
+        LOGFILE="$(date -u +%Y.%m.%d-%H.%M)_${{matrix.test}}.${GITHUB_SHA:0:7}"
+        echo "::set-output name=logfile::${LOGFILE}"
+        echo "::set-output name=log::${HOME}/logs/ci-dev-nic/${LOGFILE}"
+        case "$GITHUB_REF" in
+          "refs/heads/release-"*)
+            echo "::set-output name=path::binaries/disa/releases"
+            ;;
+          "refs/heads/master")
+            echo "::set-output name=path::binaries/disa/interim"
+            ;;
+          *"-test-"* | *"-build"*)
+            echo "::set-output name=path::tmp/disa_builds"
+            ;;
+          *)
+            echo "::set-output name=path::tmp/disa_builds"
+            ;;
+        esac
+        echo "::set-output name=use_nfdk::no"
+        # Set tests
+        if [[ ! -z "${{github.event.inputs.test_case }}" ]]; then
+              echo "::set-output name=test::${{ github.event.inputs.test_case }}"
+        elif [[ "${{github.event.inputs.test_level}}" == "basic" ]]; then
+              echo "::set-output name=test::nfpflownic.unit_no_fw_ld.ping_1_fromA"
+        elif [[ "${{github.event.inputs.test_level}}" == "normal" ]]; then
+              echo "::set-output name=test::nfpflownic.unit_no_fw_ld.ping_1_fromA"
+        fi
+    
+    #- name: Prepare firmware folder
+    #  run: |
+    #      mkdir -p ./ci-libs/ansible/roles/nfp_firmware_install/files/
+    #      mkdir -p ~/logs/ci-dev-sdn
+
+    #- name: Download latest firmware
+    #  working-directory: ci-libs/ansible/roles/nfp_firmware_install/
+    #  shell: bash
+    #  run: |
+    #    mkdir -p files && cd files
+    #    wget -O nic-firmware.tar.gz "http://storage-01.nji.corigine.com/cloud/binaries/disa/releases/tgz/agilio-flower-app-firmware-22.04-1.tar.gz"
+    #    mkdir -p ci-libs/ansible/roles/nfp_firmware_install/files
+
+    - name: Run DEV regressions
+      working-directory: ci-dev-nic-private/test/
+      shell: bash
+      run: |
+        export SDNTEST_DIRNAME=$(dirname $(dirname "$PWD"))
+        #export SDNTEST_REPO_DIRNAME=$SDNTEST_DIRNAME/ci-dev-sdn-private
+        export PATH=$PATH:$SDNTEST_DIRNAME/nti-private/nti/ti
+        set -o pipefail
+        ../../nti-private/ti/ticmd \
+        -c ../../ci-libs/ci-config/${HOSTNAME}/ci-dev-nic/nj_161_162.cfg \
+        -l ${{steps.build.outputs.log}} \
+        run ${{steps.build.outputs.test}} | \
+        sed --unbuffered 's/.*FAILED/\0\n::error::\0/'
+    # --- UPLOAD RESULTS -------
+    - name: Package results
+      run: >
+        tar -zcf ${{steps.build.outputs.log}}.tgz -C ${{steps.build.outputs.log}}/../
+        ${{steps.build.outputs.logfile}}
+      if: always()
